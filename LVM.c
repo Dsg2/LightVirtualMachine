@@ -1,13 +1,13 @@
 #include "fflang_rt.h"
 
-static const char* l = NULL;
-static FFList k = {0};
+static FFList vgadat = {0};
 static int64_t s = 0;
 static int64_t w = 0;
 static FFList lc = {0};
-static FFList fb = {0};
+static FFList k = {0};
 static FFWindow win = {0};
-static FFList vgadat = {0};
+static FFList fb = {0};
+static const char* l = NULL;
 
 static int64_t fbi(double x, double y);
 static double pix(double fbi, double r, double g, double b);
@@ -308,8 +308,8 @@ int main(void) {
                             }
                             i = 0;
                             ca = 0;
-                            kw = "labmovaddsubmuldivjmpvgakeyslphlt";
-                            tl = "12222222210";
+                            kw = "labmovaddsubmuldivmodjmpvgakeyslphlt";
+                            tl = "122222222210";
                             t = 0;
                             v = "";
                             FFList _lt18 = ff_list_zeros((int)0);
@@ -385,6 +385,12 @@ int main(void) {
                             ff_list_print(a1);
                             ff_list_print(a2);
                             if (((int64_t)strlen(dat) > 0)) {
+                                double it = 0.0;
+                                double tt = 0.0;
+                                double lt = 0.0;
+                                int64_t la = 0;
+                                int64_t d = 0;
+                                int64_t fc = 0;
                                 if ((ca == 0)) {
                                     i = 0;
                                     for (int64_t i = 0; i < memlen; i++) {
@@ -393,7 +399,13 @@ int main(void) {
                                     for (int64_t i = 0; i < jmplen; i++) {
                                         jt.data[(int)(i)] = (float)(0);
                                     }
-                                    i = 0;
+                                    i = 0.0;
+                                    it = 0.0;
+                                    tt = 0.0;
+                                    lt = ff_time();
+                                    la = (int64_t)a.len;
+                                    d = 0;
+                                    fc = 0;
                                     while ((r && ff_window_open(&win))) {
                                         double ma1 = a1.data[(int)(i)];
                                         double ma2 = a2.data[(int)(i)];
@@ -473,6 +485,17 @@ int main(void) {
                                                 } else {
                                                     f1 = ma2;
                                                 }
+                                                mem.data[(int)(ma1)] = (float)(fmod((double)(mem.data[(int)(ma1)]), (double)(f1)));
+                                                i = (i + 1);
+                                                break;
+                                            case 7:
+                                                if ((ma2 >= memlen)) {
+                                                    f1 = (ma2 - memlen);
+                                                } else if ((ma2 >= 0)) {
+                                                    f1 = mem.data[(int)(ma2)];
+                                                } else {
+                                                    f1 = ma2;
+                                                }
                                                 if ((f1 != 0)) {
                                                     if ((ma1 >= memlen)) {
                                                         i = jt.data[(int)((ma1 - memlen))];
@@ -485,7 +508,7 @@ int main(void) {
                                                     i = (i + 1);
                                                 }
                                                 break;
-                                            case 7:
+                                            case 8:
                                                 if ((ma2 >= memlen)) {
                                                     f2 = (ma2 - memlen);
                                                 } else if ((ma2 >= 0)) {
@@ -501,9 +524,10 @@ int main(void) {
                                                     f1 = ma1;
                                                 }
                                                 (void)(vga((f1 % 56), (int64_t)((f1 / 56)), f2));
+                                                d = 1;
                                                 i = (i + 1);
                                                 break;
-                                            case 8:
+                                            case 9:
                                                 if ((ma1 >= memlen)) {
                                                     f1 = (ma1 - memlen);
                                                 } else if ((ma1 >= 0)) {
@@ -514,7 +538,7 @@ int main(void) {
                                                 mem.data[(int)(ma2)] = (float)(ff_window_key(&win, ff_strsub(" `1234567890-=qwertyuiop[]\\asdfghjkl;'zxcvbnm,./~!@#$%^&*()_+QWERTYUIOP{}|ASDFGHJKL:\"ZXCVBNM<>?", (int64_t)(f1), (int64_t)(1))));
                                                 i = (i + 1);
                                                 break;
-                                            case 9:
+                                            case 10:
                                                 if ((ma2 >= memlen)) {
                                                     (void)((ff_sleep((double)(ma2 - memlen)), 0));
                                                 } else if ((ma2 >= 0)) {
@@ -524,45 +548,62 @@ int main(void) {
                                                 }
                                                 i = (i + 1);
                                                 break;
-                                            case 10:
+                                            case 11:
                                                 r = 0;
                                                 break;
                                                 break;
                                         }
-                                        i = (i % (int64_t)a.len);
-                                        (void)((ff_window_draw(&win, fb.data, (int)(w * s), (int)(h * s)), 0));
-                                        (void)((ff_window_tick(&win, (int)(1024)), 0));
+                                        i = (i % la);
+                                        if (d) {
+                                            (void)((ff_window_draw(&win, fb.data, (int)(w * s), (int)(h * s)), 0));
+                                            fc = 64;
+                                            d = 0;
+                                        }
+                                        fc = (fc + 1);
+                                        if ((fc >= 64)) {
+                                            fc = 0;
+                                            (void)((ff_window_tick(&win, (int)(1048576)), 0));
+                                        }
+                                        it = (it + 1);
                                     }
-                                    FFList _lt22 = ff_list_zeros((int)((((w * s) * h) * s) * 4));
+                                    tt = (ff_time() - lt);
+                                    printf("%s\n", ff_strcat("instructions ran: ", ff_str((double)(it))));
+                                    char* _sb22 = _ff_next_str_buf();
+                                    snprintf(_sb22, FF_STR_MAXLEN, "%.4f", tt);
+                                    printf("%s\n", ff_strcat("time taken: ", _sb22));
+                                    char* _sb23 = _ff_next_str_buf();
+                                    snprintf(_sb23, FF_STR_MAXLEN, "%.4f", (tt / it));
+                                    printf("%s\n", ff_strcat("time(s) per instruction: ", _sb23));
+                                    FFList _lt24 = ff_list_zeros((int)((((w * s) * h) * s) * 4));
                                     ff_list_free(&fb);
-                                    fb = _lt22;
+                                    fb = _lt24;
                                     r = 1;
                                 } else {
                                     (void)(txt(0, 0, ff_strcat(ff_strcat("kernels/", ff_strsub(l, (int64_t)(lc.data[(int)((c * 2))]), (int64_t)(lc.data[(int)(((c * 2) + 1))]))), " is invalid")));
                                     (void)((ff_window_draw(&win, fb.data, (int)(w * s), (int)(h * s)), 0));
                                     (void)((ff_window_tick(&win, (int)(0)), 0));
                                     (void)((ff_sleep((double)2), 0));
-                                    FFList _lt23 = ff_list_zeros((int)((((w * s) * h) * s) * 4));
+                                    FFList _lt25 = ff_list_zeros((int)((((w * s) * h) * s) * 4));
                                     ff_list_free(&fb);
-                                    fb = _lt23;
+                                    fb = _lt25;
                                 }
                             } else {
                                 (void)(txt(0, 0, ff_strcat(ff_strcat("kernels/", ff_strsub(l, (int64_t)(lc.data[(int)((c * 2))]), (int64_t)(lc.data[(int)(((c * 2) + 1))]))), " is empty")));
                                 (void)((ff_window_draw(&win, fb.data, (int)(w * s), (int)(h * s)), 0));
                                 (void)((ff_window_tick(&win, (int)(0)), 0));
                                 (void)((ff_sleep((double)2), 0));
-                                FFList _lt24 = ff_list_zeros((int)((((w * s) * h) * s) * 4));
+                                FFList _lt26 = ff_list_zeros((int)((((w * s) * h) * s) * 4));
                                 ff_list_free(&fb);
-                                fb = _lt24;
+                                fb = _lt26;
                             }
                         } else {
                             (void)(txt(0, 0, ff_strcat(ff_strcat("kernels/", ff_strsub(l, (int64_t)(lc.data[(int)((c * 2))]), (int64_t)(lc.data[(int)(((c * 2) + 1))]))), " does not exist")));
                             (void)((ff_window_draw(&win, fb.data, (int)(w * s), (int)(h * s)), 0));
                             (void)((ff_window_tick(&win, (int)(0)), 0));
                             (void)((ff_sleep((double)2), 0));
-                            FFList _lt25 = ff_list_zeros((int)((((w * s) * h) * s) * 4));
+                            FFList _lt27 = ff_list_zeros((int)((((w * s) * h) * s) * 4));
                             ff_list_free(&fb);
-                            fb = _lt25;
+                            fb = _lt27;
                         }
                         c = 0;
                     }
@@ -573,9 +614,9 @@ int main(void) {
                 if (((c == 1) && keys.data[(int)(4)])) {
                     c = 0;
                     m = 0;
-                    FFList _lt26 = ff_list_zeros((int)((((w * s) * h) * s) * 4));
+                    FFList _lt28 = ff_list_zeros((int)((((w * s) * h) * s) * 4));
                     ff_list_free(&fb);
-                    fb = _lt26;
+                    fb = _lt28;
                 }
                 break;
         }

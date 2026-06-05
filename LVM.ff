@@ -1,20 +1,25 @@
 # virutal machine runtime environment
 # mindustry/assembly inspired programming syntax
-# vm:
-# 240x135 screen default
-# 64 default data cells (data cells accessed as c<index>)
-# 16 default jmp label table
-# fb not exposed directly
-# includes high level vga inspired text display mode (char is 3x5 + space, padding gives 236x131 usable space, 56 column and 21 row), planned for raw pixels
+#
+# Virtual machine specs:
+# Interprets a language with syntax inspired by mindustry/assembly, aiming for a minimalstic but powerful language. The runtime is optimised with switch cases, and no runtime error checking for maximimum efficiency.
+# - 240x135 screen default
+# - 64 default data cells (data cells accessed as c<index>), changing length of memory planned
+# - 16 default jmp label table, changing length of jmp table planned
+# - currently framebuffer not exposed directly, includes high level vga-inspired text display mode (char is 3x5 + 1 space, padding gives 236x131 usable space, 56 column and 21 row), planned for raw pixel manipulation
+#
 # builtins:
-# lab <cell or num> - creates a label with value
+# lab <cell|num> - creates a label with value at cell or num
 # mov <dest> <source> - copies source (cell or num) to dest, dest must be cell
-# add/sub/mul/div <cell> <cell or num> - does arithmetic, stores output to first cell
+# add/sub/mul/div/mod <cell> <cell|num> - does arithmetic, stores output to first cell (must be cell)
 # jmp <lab> <cond>- jumps to label (cell or num) if cond cell is not 0
-# vga <ind> <char ind> - writes to screen location ind with value char ind
-# key <char ind> <cell> - reads if keys is down at position char ind (cell or num, based off vga char ind), stored to out cell
-# slp <char ind or num> - sleeps for time in s
+# vga <ind> <char ind> - writes to screen location ind with value char ind (char ind is line index of vga.dat)
+# key <char ind> <cell> - gets key is down at char ind (cell or num, based off vga.dat line index), stored to out cell
+# slp <cell|num> - sleeps for time in seconds
 # hlt - halts (ends the runtime)
+#
+# logic:
+# 
 
 def fbi(x, y):
     global w, s
@@ -221,8 +226,8 @@ while r:
                                 ca = ca + j + 1
                         i = 0
                         ca = 0
-                        kw = "labmovaddsubmuldivjmpvgakeyslphlt"
-                        tl = "12222222210"
+                        kw = "labmovaddsubmuldivmodjmpvgakeyslphlt"
+                        tl = "122222222210"
                         t = 0
                         v = ""
                         a = zeros(0)
@@ -285,7 +290,13 @@ while r:
                                     mem[i] = 0
                                 for i in range(jmplen):
                                     jt[i] = 0
-                                i = 0
+                                i = 0.0
+                                it = 0.0
+                                tt = 0.0
+                                lt = time()
+                                la = len(a)
+                                d = 0
+                                fc = 0
                                 while r and win.open:
                                     ma1 = a1[i]
                                     ma2 = a2[i]
@@ -352,6 +363,15 @@ while r:
                                                 f1 = mem[ma2]
                                             else:
                                                 f1 = ma2
+                                            mem[ma1] = mem[ma1] % f1
+                                            i = i + 1
+                                        case 7:
+                                            if ma2 >= memlen:
+                                                f1 = ma2 - memlen
+                                            elif ma2 >= 0:
+                                                f1 = mem[ma2]
+                                            else:
+                                                f1 = ma2
                                             if f1 != 0:
                                                 if ma1 >= memlen:
                                                     i = jt[ma1 - memlen]
@@ -361,7 +381,7 @@ while r:
                                                     i = jt[ma1]
                                             else:
                                                 i = i + 1
-                                        case 7:
+                                        case 8:
                                             if ma2 >= memlen:
                                                 f2 = ma2 - memlen
                                             elif ma2 >= 0:
@@ -375,8 +395,9 @@ while r:
                                             else:
                                                 f1 = ma1
                                             vga(f1 % 56, int(f1 / 56), f2)
+                                            d = 1
                                             i = i + 1
-                                        case 8:
+                                        case 9:
                                             if ma1 >= memlen:
                                                 f1 = ma1 - memlen
                                             elif ma1 >= 0:
@@ -385,7 +406,7 @@ while r:
                                                 f1 = ma1
                                             mem[ma2] = win.key(strsub(" `1234567890-=qwertyuiop[]\\asdfghjkl;'zxcvbnm,./~!@#$%^&*()_+QWERTYUIOP{}|ASDFGHJKL:\"ZXCVBNM<>?", f1, 1))
                                             i = i + 1
-                                        case 9:
+                                        case 10:
                                             if ma2 >= memlen:
                                                 sleep(ma2 - memlen)
                                             elif ma2 >= 0:
@@ -393,12 +414,23 @@ while r:
                                             else:
                                                 sleep(ma2)
                                             i = i + 1
-                                        case 10:
+                                        case 11:
                                             r = 0
                                             break
-                                    i = i % len(a)
-                                    win.draw(fb, w * s, h * s)
-                                    win.tick(1024)
+                                    i = i % la
+                                    if d:
+                                        win.draw(fb, w * s, h * s)
+                                        fc = 64
+                                        d = 0
+                                    fc = fc + 1
+                                    if fc >= 64:
+                                        fc = 0
+                                        win.tick(1048576)
+                                    it = it + 1
+                                tt = time() - lt
+                                print(strcat("instructions ran: ", str(it)))
+                                print(strcat("time taken: ", fmt("%.4f", tt)))
+                                print(strcat("time(s) per instruction: ", fmt("%.4f", tt / it)))
                                 fb = zeros(w * s * h * s * 4)
                                 r = 1
                             else:
