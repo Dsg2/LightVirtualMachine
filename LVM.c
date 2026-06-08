@@ -1,13 +1,14 @@
 #include "fflang_rt.h"
 
-static FFList vgadat = {0};
-static int64_t s = 0;
+static const char* l = NULL;
 static int64_t w = 0;
-static FFList lc = {0};
+static int64_t s = 0;
+static FFList g = {0};
+static FFList fb = {0};
+static FFList vgadat = {0};
 static FFList k = {0};
 static FFWindow win = {0};
-static FFList fb = {0};
-static const char* l = NULL;
+static FFList lc = {0};
 
 static int64_t fbi(double x, double y);
 static double pix(double fbi, double r, double g, double b);
@@ -102,15 +103,22 @@ static double scr(double m, double c) {
             }
             break;
         case 2:
-            (void)(txt(0, 0, "configure virtual machine"));
+            (void)(txt(0, 0, "configure virtual machine (exit and restart to take effect)"));
             switch ((int64_t)(c)) {
                 case 0:
-                    (void)(txt(0, 2, ff_strcat("> change registers size", "")));
-                    (void)(txt(0, 3, "  back"));
+                    (void)(txt(0, 2, ff_strcat(ff_strcat("> change registers size", ff_str((double)(g.data[(int)(0)]))), "        ")));
+                    (void)(txt(0, 3, "  change jump table size         "));
+                    (void)(txt(0, 4, "  back"));
                     break;
                 case 1:
-                    (void)(txt(0, 2, ff_strcat("  change registers size", "")));
-                    (void)(txt(0, 3, "> back"));
+                    (void)(txt(0, 2, "  change registers size         "));
+                    (void)(txt(0, 3, ff_strcat(ff_strcat("> change jump table size", ff_str((double)(g.data[(int)(1)]))), "        ")));
+                    (void)(txt(0, 4, "  back"));
+                    break;
+                case 2:
+                    (void)(txt(0, 2, "  change registers size         "));
+                    (void)(txt(0, 3, "  change jump table size         "));
+                    (void)(txt(0, 4, "> back"));
                     break;
             }
             break;
@@ -148,14 +156,14 @@ static FFList getkeys() {
 int main(void) {
     if ((ff_file_exists("config") == 0)) {
         FFList _lt2 = ff_list_zeros((int)2);
-        FFList g = _lt2;
+        g = _lt2;
         g.data[(int)(0)] = (float)(64);
         g.data[(int)(1)] = (float)(16);
         FFList _lt3 = g;
         ff_save_list("config", _lt3);
     }
     FFList _lt4 = ff_load_list("config");
-    FFList g = _lt4;
+    g = _lt4;
     double memlen = g.data[(int)(0)];
     double jmplen = g.data[(int)(1)];
     FFList _lt5 = ff_list_zeros((int)memlen);
@@ -610,13 +618,37 @@ int main(void) {
                 }
                 break;
             case 2:
-                c = ff_clamp((double)((c - keys.data[(int)(1)]) + keys.data[(int)(3)]), (double)0, (double)1);
-                if (((c == 1) && keys.data[(int)(4)])) {
-                    c = 0;
-                    m = 0;
-                    FFList _lt28 = ff_list_zeros((int)((((w * s) * h) * s) * 4));
-                    ff_list_free(&fb);
-                    fb = _lt28;
+                c = ff_clamp((double)((c - keys.data[(int)(1)]) + keys.data[(int)(3)]), (double)0, (double)2);
+                switch ((int64_t)(c)) {
+                    case 0:
+                        if (keys.data[(int)(4)]) {
+                            g.data[(int)(0)] = (float)((g.data[(int)(0)] * 2));
+                            if ((g.data[(int)(0)] > 1048576)) {
+                                g.data[(int)(0)] = (float)(8);
+                            }
+                            FFList _lt28 = g;
+                            ff_save_list("config", _lt28);
+                        }
+                        break;
+                    case 1:
+                        if (keys.data[(int)(4)]) {
+                            g.data[(int)(1)] = (float)((g.data[(int)(1)] * 2));
+                            if ((g.data[(int)(1)] > 2048)) {
+                                g.data[(int)(1)] = (float)(4);
+                            }
+                            FFList _lt29 = g;
+                            ff_save_list("config", _lt29);
+                        }
+                        break;
+                    case 2:
+                        if (keys.data[(int)(4)]) {
+                            c = 0;
+                            m = 0;
+                            FFList _lt30 = ff_list_zeros((int)((((w * s) * h) * s) * 4));
+                            ff_list_free(&fb);
+                            fb = _lt30;
+                        }
+                        break;
                 }
                 break;
         }

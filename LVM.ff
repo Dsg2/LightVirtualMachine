@@ -87,7 +87,7 @@ def txt(x, y, t:str):
         vga(x + i, y, vgalookup(strsub(t, i, 1)))
 
 def scr(m, c):
-    global l, lc
+    global l, lc, g
     switch m:
         case 0:
             txt(0, 0, "Light Virtual Machine")
@@ -119,14 +119,20 @@ def scr(m, c):
             else:
                 txt(0, j + 3, "  back")
         case 2:
-            txt(0, 0, "configure virtual machine")
+            txt(0, 0, "configure virtual machine (exit and restart to take effect)")
             switch c:
                 case 0:
-                    txt(0, 2, strcat("> change registers size", ""))
-                    txt(0, 3, "  back")
+                    txt(0, 2, strcat(strcat("> change registers size", str(g[0])), "        "))
+                    txt(0, 3, "  change jump table size         ")
+                    txt(0, 4, "  back")
                 case 1:
-                    txt(0, 2, strcat("  change registers size", ""))
-                    txt(0, 3, "> back")
+                    txt(0, 2, "  change registers size         ")
+                    txt(0, 3, strcat(strcat("> change jump table size", str(g[1])), "        "))
+                    txt(0, 4, "  back")
+                case 2:
+                    txt(0, 2, "  change registers size         ")
+                    txt(0, 3, "  change jump table size         ")
+                    txt(0, 4, "> back")
 
 def getkeys():
     global win, k
@@ -453,11 +459,26 @@ while r:
                         fb = zeros(w * s * h * s * 4)
                     c = 0
         case 2:
-            c = clamp(c - keys[1] + keys[3], 0, 1)
-            if c == 1 and keys[4]:
-                c = 0
-                m = 0
-                fb = zeros(w * s * h * s * 4)
+            c = clamp(c - keys[1] + keys[3], 0, 2)
+            switch c:
+                case 0:
+                    if keys[4]:
+                        g[0] = g[0] * 2
+                        if g[0] > 1048576:
+                            g[0] = 8
+                        save_list("config", g)
+                        
+                case 1:
+                    if keys[4]:
+                        g[1] = g[1] * 2
+                        if g[1] > 2048:
+                            g[1] = 4
+                        save_list("config", g)
+                case 2:
+                    if keys[4]:
+                        c = 0
+                        m = 0
+                        fb = zeros(w * s * h * s * 4)
     scr(m, c)
     win.draw(fb, w * s, h * s)
     win.tick(30)
