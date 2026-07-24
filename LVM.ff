@@ -60,6 +60,21 @@ vgabnk = ""
 print(ct)
 print("done")
 
+# --- parallelism runtime (CPU threads + GPU expression megakernel) ---
+kernel gexec = load("gexec.cl", "gexec")
+lock0 = mutex()
+lock1 = mutex()
+lock2 = mutex()
+lock3 = mutex()
+gprog = zeros(0)      # gexec micro-program, flat pairs [opcode, arg]
+gconst = zeros(0)     # gexec constant pool
+gins = zeros(0)       # gexec bound input bases (mem region starts)
+VLEN = 0              # active gexec vector length
+userline = ""         # last line typed via the `inp` opcode
+mblob = blob_open("C:\\llama\\LFM2.5-350M-Q8_0.gguf")   # mmap'd LFM2 GGUF
+memb_off = 0          # abs byte offset of token_embd Q8_0 tensor data
+n_embd = 0            # embedding dim (ne[0] of token_embd)
+
 def pix(fbi, r, g, b):
     global fb, w, s
     for i in range(s):
@@ -154,6 +169,279 @@ def getkeys():
     k[4] = win.key("enter")
     return o
 
+# --- operand decode / GPU helpers / CPU worker ---
+# Main-thread operand decode: cell in [0,memlen), immediate in [memlen,..)-memlen,
+# negative used directly. (mirrors the inline decode in the run loop)
+def rdm(v):
+    global mem, memlen
+    if v >= memlen:
+        return v - memlen
+    if v >= 0:
+        return mem[int(v)]
+    return v
+
+# Worker operand decode with a private window: cells [0,PRIV) are per-worker
+# scratch (local list `priv`), cells [PRIV,memlen) are shared `mem`.
+def rd(v, priv, mem, memlen, PRIV):
+    if v >= memlen:
+        return v - memlen
+    if v >= PRIV:
+        return mem[int(v)]
+    if v >= 0:
+        return priv[int(v)]
+    return v
+
+def wr(d, val, priv, mem, PRIV):
+    if d >= PRIV:
+        mem[int(d)] = val
+    else:
+        priv[int(d)] = val
+
+# Pack the bound input mem-regions into one contiguous buffer for gexec:
+#   inbuf[slot*vlen + e] = mem[base_slot + e]
+def gpack(gins, mem, vlen):
+    numvecs = len(gins)
+    inbuf = zeros(int(numvecs * vlen))
+    for si in range(numvecs):
+        base = int(gins[si])
+        for e in range(vlen):
+            inbuf[int(si * vlen + e)] = mem[int(base + e)]
+    return inbuf
+
+def gunpack(outbuf, mem, obase, vlen):
+    for e in range(vlen):
+        mem[int(obase + e)] = outbuf[e]
+
+# CPU worker: runs the compute-only subset of the ISA over shared `mem`, from
+# instruction `ip0`, for every logical id it owns (tid0, tid0+P, ...). Rendering
+# / IO / GPU ops are main-thread only and are skipped here.
+def core(a, a1, a2, mem, jt, ip0, tid0, count, memlen):
+    global lock0, lock1, lock2, lock3
+    PRIV = 16
+    P = 4
+    lid = tid0
+    ic = 0
+    while lid < count:
+        priv = zeros(PRIV)
+        ip = ip0
+        running = 1
+        while running:
+            op = a[int(ip)]
+            m1 = a1[int(ip)]
+            m2 = a2[int(ip)]
+            if op == 1:
+                wr(m1, rd(m2, priv, mem, memlen, PRIV), priv, mem, PRIV)
+                ip = ip + 1
+            elif op == 2:
+                wr(m1, rd(m1, priv, mem, memlen, PRIV) + rd(m2, priv, mem, memlen, PRIV), priv, mem, PRIV)
+                ip = ip + 1
+            elif op == 3:
+                wr(m1, rd(m1, priv, mem, memlen, PRIV) - rd(m2, priv, mem, memlen, PRIV), priv, mem, PRIV)
+                ip = ip + 1
+            elif op == 4:
+                wr(m1, rd(m1, priv, mem, memlen, PRIV) * rd(m2, priv, mem, memlen, PRIV), priv, mem, PRIV)
+                ip = ip + 1
+            elif op == 5:
+                wr(m1, rd(m1, priv, mem, memlen, PRIV) / rd(m2, priv, mem, memlen, PRIV), priv, mem, PRIV)
+                ip = ip + 1
+            elif op == 6:
+                wr(m1, rd(m1, priv, mem, memlen, PRIV) % rd(m2, priv, mem, memlen, PRIV), priv, mem, PRIV)
+                ip = ip + 1
+            elif op == 7:
+                if rd(m2, priv, mem, memlen, PRIV) != 0:
+                    if m1 >= memlen:
+                        ip = jt[int(m1 - memlen)]
+                    elif m1 >= 0:
+                        ip = jt[int(mem[int(m1)])]
+                    else:
+                        ip = jt[int(m1)]
+                else:
+                    ip = ip + 1
+            elif op == 15:
+                wr(m2, lid, priv, mem, PRIV)
+                ip = ip + 1
+            elif op == 16:
+                lk = int(rd(m2, priv, mem, memlen, PRIV))
+                if lk == 0:
+                    lock0.lock()
+                elif lk == 1:
+                    lock1.lock()
+                elif lk == 2:
+                    lock2.lock()
+                else:
+                    lock3.lock()
+                ip = ip + 1
+            elif op == 17:
+                lku = int(rd(m2, priv, mem, memlen, PRIV))
+                if lku == 0:
+                    lock0.unlock()
+                elif lku == 1:
+                    lock1.unlock()
+                elif lku == 2:
+                    lock2.unlock()
+                else:
+                    lock3.unlock()
+                ip = ip + 1
+            elif op == 14:
+                running = 0
+            elif op == 12:
+                running = 0
+            else:
+                ip = ip + 1
+            ic = ic + 1
+        lid = lid + P
+    return ic
+
+# --- interactive LLM chat helpers (drive external g4run engine) ---
+def clrrow(row):
+    for xx in range(56):
+        vga(xx, row, 0)
+
+# draw string t starting at text row `row`, wrapping at 56 cols and on '\n',
+# clearing rows row..20 first
+def showstr(t: str, row):
+    for ry in range(row, 21):
+        clrrow(ry)
+    cx = 0
+    cy = row
+    for i in range(strlen(t)):
+        ch = strsub(t, i, 1)
+        if streq(ch, '\n'):
+            cx = 0
+            cy = cy + 1
+        else:
+            if cy < 21:
+                vga(cx, cy, vgalookup(ch))
+            cx = cx + 1
+            if cx >= 56:
+                cx = 0
+                cy = cy + 1
+
+# blocking single-line editor at text row `row`; returns the typed string
+def readline(row):
+    global win, fb, w, s, h
+    ks = "abcdefghijklmnopqrstuvwxyz0123456789"
+    buf = ""
+    editing = 1
+    while editing and win.open:
+        for i in range(strlen(ks)):
+            ch = strsub(ks, i, 1)
+            if win.key_pressed(ch):
+                buf = strcat(buf, ch)
+        if win.key_pressed("space"):
+            buf = strcat(buf, " ")
+        if win.key_pressed("backspace"):
+            if strlen(buf) > 0:
+                buf = strsub(buf, 0, strlen(buf) - 1)
+        if win.key_pressed("enter"):
+            editing = 0
+        clrrow(row)
+        txt(0, row, strcat("> ", buf))
+        win.draw(fb, w * s, h * s)
+        win.tick(30)
+    return buf
+
+# --- GGUF (LFM2, Q8_0) model loading, in pure FFLang ---
+# byte size of a scalar GGUF metadata value type
+def gsz(t):
+    if t == 0:
+        return 1
+    if t == 1:
+        return 1
+    if t == 2:
+        return 2
+    if t == 3:
+        return 2
+    if t == 4:
+        return 4
+    if t == 5:
+        return 4
+    if t == 6:
+        return 4
+    if t == 7:
+        return 1
+    if t == 10:
+        return 8
+    if t == 11:
+        return 8
+    if t == 12:
+        return 8
+    return 4
+
+# advance past one metadata value of type t at offset o; return new offset
+def gskipval(o, t):
+    global mblob
+    b = mblob
+    if t == 8:
+        return o + 8 + blob_u64(b, o)
+    if t == 9:
+        et = blob_u32(b, o)
+        ln = blob_u64(b, o + 4)
+        o = o + 12
+        if et == 8:
+            zk = 0
+            while zk < ln:
+                o = o + 8 + blob_u64(b, o)
+                zk = zk + 1
+            return o
+        return o + gsz(et) * ln
+    return o + gsz(t)
+
+# parse the GGUF header + tensor directory; record token_embd offset/dim
+def gguf_parse():
+    global mblob, memb_off, n_embd
+    b = mblob
+    if blob_size(b) >= 32:
+        nt = blob_u64(b, 8)
+        nkv = blob_u64(b, 16)
+        o = 24
+        kv = 0
+        while kv < nkv:
+            o = o + 8 + blob_u64(b, o)
+            vt = blob_u32(b, o)
+            o = o + 4
+            o = gskipval(o, vt)
+            kv = kv + 1
+        embo = 0
+        ne = 0
+        ti = 0
+        while ti < nt:
+            nl = blob_u64(b, o)
+            name = blob_str(b, o + 8, nl)
+            o = o + 8 + nl
+            nd = blob_u32(b, o)
+            o = o + 4
+            d0 = blob_u64(b, o)
+            o = o + nd * 8
+            o = o + 4
+            toff = blob_u64(b, o)
+            o = o + 8
+            if streq(name, "token_embd.weight"):
+                embo = toff
+                ne = d0
+            ti = ti + 1
+        memb_off = int((o + 31) / 32) * 32 + embo
+        n_embd = ne
+
+# dequantize token `tok`'s Q8_0 embedding row into mem[base .. base+n_embd)
+def load_emb(tok, base):
+    global mblob, memb_off, n_embd, mem
+    b = mblob
+    nblk = int(n_embd / 32)
+    blk0 = int(tok * n_embd / 32)
+    bi = 0
+    while bi < nblk:
+        bo = memb_off + (blk0 + bi) * 34
+        sc = blob_f16(b, bo)
+        j = 0
+        while j < 32:
+            q = blob_u8(b, bo + 2 + j)
+            if q >= 128:
+                q = q - 256
+            mem[int(base + bi * 32 + j)] = q * sc
+            j = j + 1
+        bi = bi + 1
+
 c = 0
 m = 0
 scr(m, c)
@@ -232,8 +520,8 @@ while r:
                                 ca = ca + j + 1
                         i = 0
                         ca = 0
-                        kw = "labmovaddsubmuldivmodjmpvgakeyslphlt"
-                        tl = "122222222210"
+                        kw = "labmovaddsubmuldivmodjmpvgalogkeyslphltparrettidlckulkvlngclgibgcagaogrugsminpmldemb"
+                        tl = "1222222221210201111011212102"
                         t = 0
                         v = ""
                         a = zeros(0)
@@ -303,6 +591,11 @@ while r:
                                 la = len(a)
                                 d = 0
                                 fc = 0
+                                pri = 0
+                                while pri < la:
+                                    if a[pri] == 0 and a2[pri] >= memlen:
+                                        jt[int(a2[pri] - memlen)] = pri
+                                    pri = pri + 1
                                 while r and win.open:
                                     ma1 = a1[i]
                                     ma2 = a2[i]
@@ -393,17 +686,31 @@ while r:
                                             elif ma2 >= 0:
                                                 f2 = mem[ma2]
                                             else:
-                                                f2 = ma2
+                                                f2 = 0 - ma2
                                             if ma1 >= memlen:
                                                 f1 = ma1 - memlen
                                             elif ma1 >= 0:
                                                 f1 = mem[ma1]
                                             else:
                                                 f1 = ma1
-                                            vga(f1 % 56, int(f1 / 56), f2)
+                                            if f1 < 0:
+                                                f1 = (f1 + 0) * -1
+                                                f3 = str(f2)
+                                                for q in range(strlen(f3)):
+                                                    vga((f1 + q) % 56, int((f1 + q) / 56), vgalookup(strsub(f3, q, 1)) - 1)
+                                            else:
+                                                vga(f1 % 56, int(f1 / 56), f2 + 1)
                                             d = 1
                                             i = i + 1
                                         case 9:
+                                            if ma2 >= memlen:
+                                                print(str(ma2 - memlen))
+                                            elif ma2 >= 0:
+                                                print(str(mem[ma2]))
+                                            else:
+                                                print(str(ma2))
+                                            i = i + 1
+                                        case 10:
                                             if ma1 >= memlen:
                                                 f1 = ma1 - memlen
                                             elif ma1 >= 0:
@@ -412,7 +719,7 @@ while r:
                                                 f1 = ma1
                                             mem[ma2] = win.key(strsub(" `1234567890-=qwertyuiop[]\\asdfghjkl;'zxcvbnm,./~!@#$%^&*()_+QWERTYUIOP{}|ASDFGHJKL:\"ZXCVBNM<>?", f1, 1))
                                             i = i + 1
-                                        case 10:
+                                        case 11:
                                             if ma2 >= memlen:
                                                 sleep(ma2 - memlen)
                                             elif ma2 >= 0:
@@ -420,9 +727,96 @@ while r:
                                             else:
                                                 sleep(ma2)
                                             i = i + 1
-                                        case 11:
+                                        case 12:
                                             r = 0
                                             break
+                                        case 13:
+                                            if ma1 >= memlen:
+                                                plabel = jt[int(ma1 - memlen)]
+                                            elif ma1 >= 0:
+                                                plabel = jt[int(mem[int(ma1)])]
+                                            else:
+                                                plabel = jt[int(ma1)]
+                                            pcount = rdm(ma2)
+                                            t0 = spawn core(a, a1, a2, mem, jt, plabel, 0, pcount, memlen)
+                                            t1 = spawn core(a, a1, a2, mem, jt, plabel, 1, pcount, memlen)
+                                            t2 = spawn core(a, a1, a2, mem, jt, plabel, 2, pcount, memlen)
+                                            t3 = spawn core(a, a1, a2, mem, jt, plabel, 3, pcount, memlen)
+                                            join(t0)
+                                            join(t1)
+                                            join(t2)
+                                            join(t3)
+                                            i = i + 1
+                                        case 14:
+                                            i = i + 1
+                                        case 15:
+                                            mem[int(ma2)] = 0
+                                            i = i + 1
+                                        case 16:
+                                            lk = int(rdm(ma2))
+                                            if lk == 0:
+                                                lock0.lock()
+                                            elif lk == 1:
+                                                lock1.lock()
+                                            elif lk == 2:
+                                                lock2.lock()
+                                            else:
+                                                lock3.lock()
+                                            i = i + 1
+                                        case 17:
+                                            lku = int(rdm(ma2))
+                                            if lku == 0:
+                                                lock0.unlock()
+                                            elif lku == 1:
+                                                lock1.unlock()
+                                            elif lku == 2:
+                                                lock2.unlock()
+                                            else:
+                                                lock3.unlock()
+                                            i = i + 1
+                                        case 18:
+                                            VLEN = rdm(ma2)
+                                            i = i + 1
+                                        case 19:
+                                            gprog = zeros(0)
+                                            gconst = zeros(0)
+                                            gins = zeros(0)
+                                            i = i + 1
+                                        case 20:
+                                            gins.append(rdm(ma2))
+                                            i = i + 1
+                                        case 21:
+                                            gconst.append(rdm(ma2))
+                                            i = i + 1
+                                        case 22:
+                                            gprog.append(rdm(ma1))
+                                            gprog.append(rdm(ma2))
+                                            i = i + 1
+                                        case 23:
+                                            vln = int(VLEN)
+                                            nv = len(gins)
+                                            pl = int(len(gprog) / 2)
+                                            inbuf = gpack(gins, mem, vln)
+                                            outbuf = zeros(vln)
+                                            run gexec(inbuf, gprog, gconst, nv, pl, vln) -> outbuf size(vln)
+                                            gunpack(outbuf, mem, int(rdm(ma2)), vln)
+                                            i = i + 1
+                                        case 24:
+                                            sbase = int(rdm(ma1))
+                                            sv = 0.0
+                                            for se in range(int(VLEN)):
+                                                sv = sv + mem[int(sbase + se)]
+                                            mem[int(ma2)] = sv
+                                            i = i + 1
+                                        case 25:
+                                            userline = readline(int(rdm(ma2)))
+                                            i = i + 1
+                                        case 26:
+                                            gguf_parse()
+                                            i = i + 1
+                                        case 27:
+                                            load_emb(int(rdm(ma1)), int(rdm(ma2)))
+                                            i = i + 1
                                     i = i % la
                                     if d:
                                         win.draw(fb, w * s, h * s)
@@ -464,7 +858,7 @@ while r:
                 case 0:
                     if keys[4]:
                         g[0] = g[0] * 2
-                        if g[0] > 1048576:
+                        if g[0] > 16777216:
                             g[0] = 8
                         save_list("config", g)
                         
